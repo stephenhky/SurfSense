@@ -9,7 +9,7 @@ from langchain_core.runnables import RunnableConfig
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .configuration import Configuration, SearchMode
-from .prompts import get_answer_outline_system_prompt
+from .prompts import get_answer_outline_system_prompt, get_further_questions_system_prompt
 from .state import State
 from .sub_section_writer.graph import graph as sub_section_writer_graph
 from .sub_section_writer.configuration import SubSectionType
@@ -266,27 +266,36 @@ async def write_answer_outline(state: State, config: RunnableConfig, writer: Str
     from app.db import get_async_session
     
     streaming_service = state.streaming_service
-    
-    streaming_service.only_update_terminal("🔍 Generating answer outline...")
-    writer({"yeild_value": streaming_service._format_annotations()})
+
+    writer(
+        {
+            "yield_value": streaming_service.format_terminal_info_delta(
+                "🔍 Generating answer outline..."
+            )
+        }
+    )
     # Get configuration from runnable config
     configuration = Configuration.from_runnable_config(config)
     reformulated_query = state.reformulated_query
     user_query = configuration.user_query
     num_sections = configuration.num_sections
     user_id = configuration.user_id
-    
-    streaming_service.only_update_terminal(f"🤔 Planning research approach for: \"{user_query[:100]}...\"")
-    writer({"yeild_value": streaming_service._format_annotations()})
-    
+
+    writer(
+        {
+            "yield_value": streaming_service.format_terminal_info_delta(
+                f'🤔 Planning research approach for: "{user_query[:100]}..."'
+            )
+        }
+    )
+
     # Get user's strategic LLM
     llm = await get_user_strategic_llm(state.db_session, user_id)
     if not llm:
         error_message = f"No strategic LLM configured for user {user_id}"
-        streaming_service.only_update_terminal(f"❌ {error_message}", "error")
-        writer({"yeild_value": streaming_service._format_annotations()})
+        writer({"yield_value": streaming_service.format_error(error_message)})
         raise RuntimeError(error_message)
-    
+
     # Create the human message content
     human_message_content = f"""
     Now Please create an answer outline for the following query:
@@ -310,10 +319,15 @@ async def write_answer_outline(state: State, config: RunnableConfig, writer: Str
     
     Your output MUST be valid JSON in exactly this format. Do not include any other text or explanation.
     """
-    
-    streaming_service.only_update_terminal("📝 Designing structured outline with AI...")
-    writer({"yeild_value": streaming_service._format_annotations()})
-    
+
+    writer(
+        {
+            "yield_value": streaming_service.format_terminal_info_delta(
+                "📝 Designing structured outline with AI..."
+            )
+        }
+    )
+
     # Create messages for the LLM
     messages = [
         SystemMessage(content=get_answer_outline_system_prompt()),
@@ -321,9 +335,14 @@ async def write_answer_outline(state: State, config: RunnableConfig, writer: Str
     ]
     
     # Call the LLM directly without using structured output
-    streaming_service.only_update_terminal("⚙️ Processing answer structure...")
-    writer({"yeild_value": streaming_service._format_annotations()})
-    
+    writer(
+        {
+            "yield_value": streaming_service.format_terminal_info_delta(
+                "⚙️ Processing answer structure..."
+            )
+        }
+    )
+
     response = await llm.ainvoke(messages)
     
     # Parse the JSON response manually
@@ -344,26 +363,34 @@ async def write_answer_outline(state: State, config: RunnableConfig, writer: Str
             answer_outline = AnswerOutline(**parsed_data)
             
             total_questions = sum(len(section.questions) for section in answer_outline.answer_outline)
-            streaming_service.only_update_terminal(f"✅ Successfully generated outline with {len(answer_outline.answer_outline)} sections and {total_questions} research questions!")
-            writer({"yeild_value": streaming_service._format_annotations()})
             
-            print(f"Successfully generated answer outline with {len(answer_outline.answer_outline)} sections")
-            
+            writer(
+                {
+                    "yield_value": streaming_service.format_terminal_info_delta(
+                        f"✅ Successfully generated outline with {len(answer_outline.answer_outline)} sections and {total_questions} research questions!"
+                    )
+                }
+            )
+
+            print(
+                f"Successfully generated answer outline with {len(answer_outline.answer_outline)} sections"
+            )
+
             # Return state update
             return {"answer_outline": answer_outline}
         else:
             # If JSON structure not found, raise a clear error
-            error_message = f"Could not find valid JSON in LLM response. Raw response: {content}"
-            streaming_service.only_update_terminal(f"❌ {error_message}", "error")
-            writer({"yeild_value": streaming_service._format_annotations()})
+            error_message = (
+                f"Could not find valid JSON in LLM response. Raw response: {content}"
+            )
+            writer({"yield_value": streaming_service.format_error(error_message)})
             raise ValueError(error_message)
-            
+
     except (json.JSONDecodeError, ValueError) as e:
         # Log the error and re-raise it
         error_message = f"Error parsing LLM response: {str(e)}"
-        streaming_service.only_update_terminal(f"❌ {error_message}", "error")
-        writer({"yeild_value": streaming_service._format_annotations()})
-        
+        writer({"yield_value": streaming_service.format_error(error_message)})
+
         print(f"Error parsing LLM response: {str(e)}")
         print(f"Raw response: {response.content}")
         raise
@@ -414,8 +441,13 @@ async def fetch_relevant_documents(
     if streaming_service and writer:
         connector_names = [get_connector_friendly_name(connector) for connector in connectors_to_search]
         connector_names_str = ", ".join(connector_names)
-        streaming_service.only_update_terminal(f"🔎 Starting research on {len(research_questions)} questions using {connector_names_str} data sources")
-        writer({"yeild_value": streaming_service._format_annotations()})
+        writer(
+            {
+                "yield_value": streaming_service.format_terminal_info_delta(
+                    f"🔎 Starting research on {len(research_questions)} questions using {connector_names_str} data sources"
+                )
+            }
+        )
 
     all_raw_documents = []  # Store all raw documents
     all_sources = []  # Store all sources
@@ -423,9 +455,14 @@ async def fetch_relevant_documents(
     for i, user_query in enumerate(research_questions):
         # Stream question being researched
         if streaming_service and writer:
-            streaming_service.only_update_terminal(f"🧠 Researching question {i+1}/{len(research_questions)}: \"{user_query[:100]}...\"")
-            writer({"yeild_value": streaming_service._format_annotations()})
-            
+            writer(
+                {
+                    "yield_value": streaming_service.format_terminal_info_delta(
+                        f'🧠 Researching question {i + 1}/{len(research_questions)}: "{user_query[:100]}..."'
+                    )
+                }
+            )
+
         # Use original research question as the query
         reformulated_query = user_query
         
@@ -435,9 +472,14 @@ async def fetch_relevant_documents(
             if streaming_service and writer:
                 connector_emoji = get_connector_emoji(connector)
                 friendly_name = get_connector_friendly_name(connector)
-                streaming_service.only_update_terminal(f"{connector_emoji} Searching {friendly_name} for relevant information...")
-                writer({"yeild_value": streaming_service._format_annotations()})
-                
+                writer(
+                    {
+                        "yield_value": streaming_service.format_terminal_info_delta(
+                            f"{connector_emoji} Searching {friendly_name} for relevant information..."
+                        )
+                    }
+                )
+
             try:
                 if connector == "YOUTUBE_VIDEO":
                     source_object, youtube_chunks = await connector_service.search_youtube(
@@ -455,9 +497,14 @@ async def fetch_relevant_documents(
                     
                     # Stream found document count
                     if streaming_service and writer:
-                        streaming_service.only_update_terminal(f"📹 Found {len(youtube_chunks)} YouTube chunks related to your query")
-                        writer({"yeild_value": streaming_service._format_annotations()})
-                    
+                        writer(
+                            {
+                                "yield_value": streaming_service.format_terminal_info_delta(
+                                    f"📹 Found {len(youtube_chunks)} YouTube chunks related to your query"
+                                )
+                            }
+                        )
+
                 elif connector == "EXTENSION":
                     source_object, extension_chunks = await connector_service.search_extension(
                         user_query=reformulated_query,
@@ -474,9 +521,14 @@ async def fetch_relevant_documents(
                     
                     # Stream found document count
                     if streaming_service and writer:
-                        streaming_service.only_update_terminal(f"🧩 Found {len(extension_chunks)} Browser Extension chunks related to your query")
-                        writer({"yeild_value": streaming_service._format_annotations()})
-                    
+                        writer(
+                            {
+                                "yield_value": streaming_service.format_terminal_info_delta(
+                                    f"🧩 Found {len(extension_chunks)} Browser Extension chunks related to your query"
+                                )
+                            }
+                        )
+
                 elif connector == "CRAWLED_URL":
                     source_object, crawled_urls_chunks = await connector_service.search_crawled_urls(
                         user_query=reformulated_query,
@@ -493,9 +545,14 @@ async def fetch_relevant_documents(
                     
                     # Stream found document count
                     if streaming_service and writer:
-                        streaming_service.only_update_terminal(f"🌐 Found {len(crawled_urls_chunks)} Web Pages chunks related to your query")
-                        writer({"yeild_value": streaming_service._format_annotations()})
-                    
+                        writer(
+                            {
+                                "yield_value": streaming_service.format_terminal_info_delta(
+                                    f"🌐 Found {len(crawled_urls_chunks)} Web Pages chunks related to your query"
+                                )
+                            }
+                        )
+
                 elif connector == "FILE":
                     source_object, files_chunks = await connector_service.search_files(
                         user_query=reformulated_query,
@@ -512,10 +569,14 @@ async def fetch_relevant_documents(
                     
                     # Stream found document count
                     if streaming_service and writer:
-                        streaming_service.only_update_terminal(f"📄 Found {len(files_chunks)} Files chunks related to your query")
-                        writer({"yeild_value": streaming_service._format_annotations()})
-                    
-                    
+                        writer(
+                            {
+                                "yield_value": streaming_service.format_terminal_info_delta(
+                                    f"📄 Found {len(files_chunks)} Files chunks related to your query"
+                                )
+                            }
+                        )
+
                 elif connector == "SLACK_CONNECTOR":
                     source_object, slack_chunks = await connector_service.search_slack(
                         user_query=reformulated_query,
@@ -532,9 +593,14 @@ async def fetch_relevant_documents(
                     
                     # Stream found document count
                     if streaming_service and writer:
-                        streaming_service.only_update_terminal(f"💬 Found {len(slack_chunks)} Slack messages related to your query")
-                        writer({"yeild_value": streaming_service._format_annotations()})
-                    
+                        writer(
+                            {
+                                "yield_value": streaming_service.format_terminal_info_delta(
+                                    f"💬 Found {len(slack_chunks)} Slack messages related to your query"
+                                )
+                            }
+                        )
+
                 elif connector == "NOTION_CONNECTOR":
                     source_object, notion_chunks = await connector_service.search_notion(
                         user_query=reformulated_query,
@@ -551,9 +617,14 @@ async def fetch_relevant_documents(
                     
                     # Stream found document count
                     if streaming_service and writer:
-                        streaming_service.only_update_terminal(f"📘 Found {len(notion_chunks)} Notion pages/blocks related to your query")
-                        writer({"yeild_value": streaming_service._format_annotations()})
-                    
+                        writer(
+                            {
+                                "yield_value": streaming_service.format_terminal_info_delta(
+                                    f"📘 Found {len(notion_chunks)} Notion pages/blocks related to your query"
+                                )
+                            }
+                        )
+
                 elif connector == "GITHUB_CONNECTOR":
                     source_object, github_chunks = await connector_service.search_github(
                         user_query=reformulated_query,
@@ -570,9 +641,14 @@ async def fetch_relevant_documents(
                     
                     # Stream found document count
                     if streaming_service and writer:
-                        streaming_service.only_update_terminal(f"🐙 Found {len(github_chunks)} GitHub files/issues related to your query")
-                        writer({"yeild_value": streaming_service._format_annotations()})
-                    
+                        writer(
+                            {
+                                "yield_value": streaming_service.format_terminal_info_delta(
+                                    f"🐙 Found {len(github_chunks)} GitHub files/issues related to your query"
+                                )
+                            }
+                        )
+
                 elif connector == "LINEAR_CONNECTOR":
                     source_object, linear_chunks = await connector_service.search_linear(
                         user_query=reformulated_query,
@@ -589,9 +665,14 @@ async def fetch_relevant_documents(
                     
                     # Stream found document count
                     if streaming_service and writer:
-                        streaming_service.only_update_terminal(f"📊 Found {len(linear_chunks)} Linear issues related to your query")
-                        writer({"yeild_value": streaming_service._format_annotations()})
-                        
+                        writer(
+                            {
+                                "yield_value": streaming_service.format_terminal_info_delta(
+                                    f"📊 Found {len(linear_chunks)} Linear issues related to your query"
+                                )
+                            }
+                        )
+
                 elif connector == "TAVILY_API":
                     source_object, tavily_chunks = await connector_service.search_tavily(
                         user_query=reformulated_query,
@@ -606,9 +687,14 @@ async def fetch_relevant_documents(
                     
                     # Stream found document count
                     if streaming_service and writer:
-                        streaming_service.only_update_terminal(f"🔍 Found {len(tavily_chunks)} Web Search results related to your query")
-                        writer({"yeild_value": streaming_service._format_annotations()})
-                        
+                        writer(
+                            {
+                                "yield_value": streaming_service.format_terminal_info_delta(
+                                    f"🔍 Found {len(tavily_chunks)} Web Search results related to your query"
+                                )
+                            }
+                        )
+
                 elif connector == "LINKUP_API":
                     if top_k > 10:
                         linkup_mode = "deep"
@@ -628,9 +714,14 @@ async def fetch_relevant_documents(
                     
                     # Stream found document count
                     if streaming_service and writer:
-                        streaming_service.only_update_terminal(f"🔗 Found {len(linkup_chunks)} Linkup results related to your query")
-                        writer({"yeild_value": streaming_service._format_annotations()})
-                        
+                        writer(
+                            {
+                                "yield_value": streaming_service.format_terminal_info_delta(
+                                    f"🔗 Found {len(linkup_chunks)} Linkup results related to your query"
+                                )
+                            }
+                        )
+
                 elif connector == "DISCORD_CONNECTOR":
                     source_object, discord_chunks = await connector_service.search_discord(
                         user_query=reformulated_query,
@@ -645,9 +736,13 @@ async def fetch_relevant_documents(
                     all_raw_documents.extend(discord_chunks)
                     # Stream found document count
                     if streaming_service and writer:
-                        streaming_service.only_update_terminal(f"🗨️ Found {len(discord_chunks)} Discord messages related to your query")
-                        writer({"yeild_value": streaming_service._format_annotations()})
-                    
+                        writer(
+                            {
+                                "yield_value": streaming_service.format_terminal_info_delta(
+                                    f"🗨️ Found {len(discord_chunks)} Discord messages related to your query"
+                                )
+                            }
+                        )
 
             except Exception as e:
                 error_message = f"Error searching connector {connector}: {str(e)}"
@@ -656,9 +751,14 @@ async def fetch_relevant_documents(
                 # Stream error message
                 if streaming_service and writer:
                     friendly_name = get_connector_friendly_name(connector)
-                    streaming_service.only_update_terminal(f"⚠️ Error searching {friendly_name}: {str(e)}", "error")
-                    writer({"yeild_value": streaming_service._format_annotations()})
-                
+                    writer(
+                        {
+                            "yield_value": streaming_service.format_error(
+                                f"Error searching {friendly_name}: {str(e)}"
+                            )
+                        }
+                    )
+
                 # Continue with other connectors on error
                 continue
     
@@ -700,14 +800,18 @@ async def fetch_relevant_documents(
     if streaming_service and writer:
         user_source_count = len(user_selected_sources) if user_selected_sources else 0
         connector_source_count = len(deduplicated_sources) - user_source_count
-        streaming_service.only_update_terminal(f"📚 Collected {len(deduplicated_sources)} total sources ({user_source_count} user-selected + {connector_source_count} from connectors)")
-        writer({"yeild_value": streaming_service._format_annotations()})
-        
+        writer(
+            {
+                "yield_value": streaming_service.format_terminal_info_delta(
+                    f"📚 Collected {len(deduplicated_sources)} total sources ({user_source_count} user-selected + {connector_source_count} from connectors)"
+                )
+            }
+        )
+
     # After all sources are collected and deduplicated, stream them
     if streaming_service and writer:
-        streaming_service.only_update_sources(deduplicated_sources)
-        writer({"yeild_value": streaming_service._format_annotations()})
-    
+        writer({"yield_value": streaming_service.format_sources_delta(deduplicated_sources)})
+
     # Deduplicate raw documents based on chunk_id or content
     seen_chunk_ids = set()
     seen_content_hashes = set()
@@ -730,9 +834,14 @@ async def fetch_relevant_documents(
     
     # Stream info about deduplicated documents
     if streaming_service and writer:
-        streaming_service.only_update_terminal(f"🧹 Found {len(deduplicated_docs)} unique document chunks after removing duplicates")
-        writer({"yeild_value": streaming_service._format_annotations()})
-    
+        writer(
+            {
+                "yield_value": streaming_service.format_terminal_info_delta(
+                    f"🧹 Found {len(deduplicated_docs)} unique document chunks after removing duplicates"
+                )
+            }
+        )
+
     # Return deduplicated documents
     return deduplicated_docs
 
@@ -756,15 +865,20 @@ async def process_sections(state: State, config: RunnableConfig, writer: StreamW
     # Initialize a dictionary to track content for all sections
     # This is used to maintain section content while streaming multiple sections
     section_contents = {}
-    
-    streaming_service.only_update_terminal(f"🚀 Starting to process research sections...")
-    writer({"yeild_value": streaming_service._format_annotations()})
-    
+
+    writer(
+        {
+            "yield_value": streaming_service.format_terminal_info_delta(
+                "🚀 Starting to process research sections..."
+            )
+        }
+    )
+
     print(f"Processing sections from outline: {answer_outline is not None}")
     
     if not answer_outline:
-        streaming_service.only_update_terminal("❌ Error: No answer outline was provided. Cannot generate report.", "error")
-        writer({"yeild_value": streaming_service._format_annotations()})
+        error_message = "No answer outline was provided. Cannot generate report."
+        writer({"yield_value": streaming_service.format_error(error_message)})
         return {
             "final_written_report": "No answer outline was provided. Cannot generate final report."
         }
@@ -775,13 +889,23 @@ async def process_sections(state: State, config: RunnableConfig, writer: StreamW
         all_questions.extend(section.questions)
     
     print(f"Collected {len(all_questions)} questions from all sections")
-    streaming_service.only_update_terminal(f"🧩 Found {len(all_questions)} research questions across {len(answer_outline.answer_outline)} sections")
-    writer({"yeild_value": streaming_service._format_annotations()})
-    
+    writer(
+        {
+            "yield_value": streaming_service.format_terminal_info_delta(
+                f"🧩 Found {len(all_questions)} research questions across {len(answer_outline.answer_outline)} sections"
+            )
+        }
+    )
+
     # Fetch relevant documents once for all questions
-    streaming_service.only_update_terminal("🔍 Searching for relevant information across all connectors...")
-    writer({"yeild_value": streaming_service._format_annotations()})
-    
+    writer(
+        {
+            "yield_value": streaming_service.format_terminal_info_delta(
+                "🔍 Searching for relevant information across all connectors..."
+            )
+        }
+    )
+
     if configuration.num_sections == 1:
         TOP_K = 10
     elif configuration.num_sections == 3:
@@ -798,9 +922,14 @@ async def process_sections(state: State, config: RunnableConfig, writer: StreamW
     try:
         # First, fetch user-selected documents if any
         if configuration.document_ids_to_add_in_context:
-            streaming_service.only_update_terminal(f"📋 Including {len(configuration.document_ids_to_add_in_context)} user-selected documents...")
-            writer({"yeild_value": streaming_service._format_annotations()})
-            
+            writer(
+                {
+                    "yield_value": streaming_service.format_terminal_info_delta(
+                        f"📋 Including {len(configuration.document_ids_to_add_in_context)} user-selected documents..."
+                    )
+                }
+            )
+
             user_selected_sources, user_selected_documents = await fetch_documents_by_ids(
                 document_ids=configuration.document_ids_to_add_in_context,
                 user_id=configuration.user_id,
@@ -808,9 +937,14 @@ async def process_sections(state: State, config: RunnableConfig, writer: StreamW
             )
             
             if user_selected_documents:
-                streaming_service.only_update_terminal(f"✅ Successfully added {len(user_selected_documents)} user-selected documents to context")
-                writer({"yeild_value": streaming_service._format_annotations()})
-        
+                writer(
+                    {
+                        "yield_value": streaming_service.format_terminal_info_delta(
+                            f"✅ Successfully added {len(user_selected_documents)} user-selected documents to context"
+                        )
+                    }
+                )
+
         # Create connector service using state db_session
         connector_service = ConnectorService(state.db_session, user_id=configuration.user_id)
         await connector_service.initialize_counter()
@@ -831,8 +965,7 @@ async def process_sections(state: State, config: RunnableConfig, writer: StreamW
     except Exception as e:
         error_message = f"Error fetching relevant documents: {str(e)}"
         print(error_message)
-        streaming_service.only_update_terminal(f"❌ {error_message}", "error")
-        writer({"yeild_value": streaming_service._format_annotations()})
+        writer({"yield_value": streaming_service.format_error(error_message)})
         # Log the error and continue with an empty list of documents
         # This allows the process to continue, but the report might lack information
         relevant_documents = []
@@ -843,15 +976,25 @@ async def process_sections(state: State, config: RunnableConfig, writer: StreamW
     print(f"Fetched {len(relevant_documents)} relevant documents for all sections")
     print(f"Added {len(user_selected_documents)} user-selected documents for all sections")
     print(f"Total documents for sections: {len(all_documents)}")
-    
-    streaming_service.only_update_terminal(f"✨ Starting to draft {len(answer_outline.answer_outline)} sections using {len(all_documents)} total document chunks ({len(user_selected_documents)} user-selected + {len(relevant_documents)} connector-found)")
-    writer({"yeild_value": streaming_service._format_annotations()})
-    
+
+    writer(
+        {
+            "yield_value": streaming_service.format_terminal_info_delta(
+                f"✨ Starting to draft {len(answer_outline.answer_outline)} sections using {len(all_documents)} total document chunks ({len(user_selected_documents)} user-selected + {len(relevant_documents)} connector-found)"
+            )
+        }
+    )
+
     # Create tasks to process each section in parallel with the same document set
     section_tasks = []
-    streaming_service.only_update_terminal("⚙️ Creating processing tasks for each section...")
-    writer({"yeild_value": streaming_service._format_annotations()})
-    
+    writer(
+        {
+            "yield_value": streaming_service.format_terminal_info_delta(
+                "⚙️ Creating processing tasks for each section..."
+            )
+        }
+    )
+
     for i, section in enumerate(answer_outline.answer_outline):
         if i == 0:
             sub_section_type = SubSectionType.START
@@ -885,23 +1028,32 @@ async def process_sections(state: State, config: RunnableConfig, writer: StreamW
     
     # Run all section processing tasks in parallel
     print(f"Running {len(section_tasks)} section processing tasks in parallel")
-    streaming_service.only_update_terminal(f"⏳ Processing {len(section_tasks)} sections simultaneously...")
-    writer({"yeild_value": streaming_service._format_annotations()})
-    
+    writer(
+        {
+            "yield_value": streaming_service.format_terminal_info_delta(
+                f"⏳ Processing {len(section_tasks)} sections simultaneously..."
+            )
+        }
+    )
+
     section_results = await asyncio.gather(*section_tasks, return_exceptions=True)
     
     # Handle any exceptions in the results
-    streaming_service.only_update_terminal("🧵 Combining section results into final report...")
-    writer({"yeild_value": streaming_service._format_annotations()})
-    
+    writer(
+        {
+            "yield_value": streaming_service.format_terminal_info_delta(
+                "🧵 Combining section results into final report..."
+            )
+        }
+    )
+
     processed_results = []
     for i, result in enumerate(section_results):
         if isinstance(result, Exception):
             section_title = answer_outline.answer_outline[i].section_title
             error_message = f"Error processing section '{section_title}': {str(result)}"
             print(error_message)
-            streaming_service.only_update_terminal(f"⚠️ {error_message}", "error")
-            writer({"yeild_value": streaming_service._format_annotations()})
+            writer({"yield_value": streaming_service.format_error(error_message)})
             processed_results.append(error_message)
         else:
             processed_results.append(result)
@@ -912,20 +1064,32 @@ async def process_sections(state: State, config: RunnableConfig, writer: StreamW
         # Skip adding the section header since the content already contains the title
         final_report.append(content)
         final_report.append("\n")  
+        
+        # Stream each section with its title
+        writer(
+            {
+                "yield_value": state.streaming_service.format_text_chunk(f"# {section.section_title}\n\n{content}")
+            }
+        )
 
     
     # Join all sections with newlines
     final_written_report = "\n".join(final_report)
     print(f"Generated final report with {len(final_report)} parts")
-    
-    streaming_service.only_update_terminal("🎉 Final research report generated successfully!")
-    writer({"yeild_value": streaming_service._format_annotations()})
-    
-    # Skip the final update since we've been streaming incremental updates
-    # The final answer from each section is already shown in the UI
-    
+
+    writer(
+        {
+            "yield_value": streaming_service.format_terminal_info_delta(
+                "🎉 Final research report generated successfully!"
+            )
+        }
+    )
+
+    # Use the shared documents for further question generation
+    # Since all sections used the same document pool, we can use it directly
     return {
-        "final_written_report": final_written_report
+        "final_written_report": final_written_report,
+        "reranked_documents": all_documents
     }
 
 
@@ -966,16 +1130,26 @@ async def process_section_with_documents(
         
         # Send status update via streaming if available
         if state and state.streaming_service and writer:
-            state.streaming_service.only_update_terminal(f"📝 Writing section: \"{section_title}\" with {len(section_questions)} research questions")
-            writer({"yeild_value": state.streaming_service._format_annotations()})
-        
+            writer(
+                {
+                    "yield_value": state.streaming_service.format_terminal_info_delta(
+                        f'📝 Writing section: "{section_title}" with {len(section_questions)} research questions'
+                    )
+                }
+            )
+
         # Fallback if no documents found
         if not documents_to_use:
             print(f"No relevant documents found for section: {section_title}")
             if state and state.streaming_service and writer:
-                state.streaming_service.only_update_terminal(f"⚠️ Warning: No relevant documents found for section: \"{section_title}\"", "warning")
-                writer({"yeild_value": state.streaming_service._format_annotations()})
-                
+                writer(
+                    {
+                        "yield_value": state.streaming_service.format_error(
+                            f'Warning: No relevant documents found for section: "{section_title}"'
+                        )
+                    }
+                )
+
             documents_to_use = [
                 {"content": f"No specific information was found for: {question}"}
                 for question in section_questions
@@ -990,7 +1164,7 @@ async def process_section_with_documents(
                 "user_query": user_query,
                 "relevant_documents": documents_to_use,
                 "user_id": user_id,
-                "search_space_id": search_space_id
+                "search_space_id": search_space_id,
             }
         }
         
@@ -1003,9 +1177,14 @@ async def process_section_with_documents(
         # Invoke the sub-section writer graph with streaming
         print(f"Invoking sub_section_writer for: {section_title}")
         if state and state.streaming_service and writer:
-            state.streaming_service.only_update_terminal(f"🧠 Analyzing information and drafting content for section: \"{section_title}\"")
-            writer({"yeild_value": state.streaming_service._format_annotations()})
-        
+            writer(
+                {
+                    "yield_value": state.streaming_service.format_terminal_info_delta(
+                        f'🧠 Analyzing information and drafting content for section: "{section_title}"'
+                    )
+                }
+            )
+
         # Variables to track streaming state
         complete_content = ""  # Tracks the complete content received so far
         
@@ -1022,8 +1201,14 @@ async def process_section_with_documents(
                     # Only stream if there's actual new content
                     if delta and state and state.streaming_service and writer:
                         # Update terminal with real-time progress indicator
-                        state.streaming_service.only_update_terminal(f"✍️ Writing section {section_id+1}... ({len(complete_content.split())} words)")
-                        
+                        writer(
+                            {
+                                "yield_value": state.streaming_service.format_terminal_info_delta(
+                                    f"✍️ Writing section {section_id + 1}... ({len(complete_content.split())} words)"
+                                )
+                            }
+                        )
+
                         # Update section_contents with just the new delta
                         section_contents[section_id]["content"] += delta
                         
@@ -1040,10 +1225,7 @@ async def process_section_with_documents(
                                 complete_answer.extend(content_lines)
                                 complete_answer.append("")  # Empty line after content
                         
-                        # Update answer in UI in real-time
-                        state.streaming_service.only_update_answer(complete_answer)
-                        writer({"yeild_value": state.streaming_service._format_annotations()})
-        
+
         # Set default if no content was received
         if not complete_content:
             complete_content = "No content was generated for this section."
@@ -1051,18 +1233,28 @@ async def process_section_with_documents(
         
         # Final terminal update
         if state and state.streaming_service and writer:
-            state.streaming_service.only_update_terminal(f"✅ Completed section: \"{section_title}\"")
-            writer({"yeild_value": state.streaming_service._format_annotations()})
-        
+            writer(
+                {
+                    "yield_value": state.streaming_service.format_terminal_info_delta(
+                        f'✅ Completed section: "{section_title}"'
+                    )
+                }
+            )
+
         return complete_content
     except Exception as e:
         print(f"Error processing section '{section_title}': {str(e)}")
         
         # Send error update via streaming if available
         if state and state.streaming_service and writer:
-            state.streaming_service.only_update_terminal(f"❌ Error processing section \"{section_title}\": {str(e)}", "error")
-            writer({"yeild_value": state.streaming_service._format_annotations()})
-            
+            writer(
+                {
+                    "yield_value": state.streaming_service.format_error(
+                        f'Error processing section "{section_title}": {str(e)}'
+                    )
+                }
+            )
+
         return f"Error processing section: {section_title}. Details: {str(e)}"
 
 
@@ -1099,17 +1291,32 @@ async def handle_qna_workflow(state: State, config: RunnableConfig, writer: Stre
     
     reformulated_query = state.reformulated_query
     user_query = configuration.user_query
-    
-    streaming_service.only_update_terminal("🤔 Starting Q&A research workflow...")
-    writer({"yeild_value": streaming_service._format_annotations()})
-    
-    streaming_service.only_update_terminal(f"🔍 Researching: \"{user_query[:100]}...\"")
-    writer({"yeild_value": streaming_service._format_annotations()})
-    
+
+    writer(
+        {
+            "yield_value": streaming_service.format_terminal_info_delta(
+                "🤔 Starting Q&A research workflow..."
+            )
+        }
+    )
+
+    writer(
+        {
+            "yield_value": streaming_service.format_terminal_info_delta(
+                f'🔍 Researching: "{user_query[:100]}..."'
+            )
+        }
+    )
+
     # Fetch relevant documents for the QNA query
-    streaming_service.only_update_terminal("🔍 Searching for relevant information across all connectors...")
-    writer({"yeild_value": streaming_service._format_annotations()})
-    
+    writer(
+        {
+            "yield_value": streaming_service.format_terminal_info_delta(
+                "🔍 Searching for relevant information across all connectors..."
+            )
+        }
+    )
+
     # Use a reasonable top_k for QNA - not too many documents to avoid overwhelming the LLM
     TOP_K = 15
     
@@ -1120,9 +1327,14 @@ async def handle_qna_workflow(state: State, config: RunnableConfig, writer: Stre
     try:
         # First, fetch user-selected documents if any
         if configuration.document_ids_to_add_in_context:
-            streaming_service.only_update_terminal(f"📋 Including {len(configuration.document_ids_to_add_in_context)} user-selected documents...")
-            writer({"yeild_value": streaming_service._format_annotations()})
-            
+            writer(
+                {
+                    "yield_value": streaming_service.format_terminal_info_delta(
+                        f"📋 Including {len(configuration.document_ids_to_add_in_context)} user-selected documents..."
+                    )
+                }
+            )
+
             user_selected_sources, user_selected_documents = await fetch_documents_by_ids(
                 document_ids=configuration.document_ids_to_add_in_context,
                 user_id=configuration.user_id,
@@ -1130,9 +1342,14 @@ async def handle_qna_workflow(state: State, config: RunnableConfig, writer: Stre
             )
             
             if user_selected_documents:
-                streaming_service.only_update_terminal(f"✅ Successfully added {len(user_selected_documents)} user-selected documents to context")
-                writer({"yeild_value": streaming_service._format_annotations()})
-        
+                writer(
+                    {
+                        "yield_value": streaming_service.format_terminal_info_delta(
+                            f"✅ Successfully added {len(user_selected_documents)} user-selected documents to context"
+                        )
+                    }
+                )
+
         # Create connector service using state db_session
         connector_service = ConnectorService(state.db_session, user_id=configuration.user_id)
         await connector_service.initialize_counter()
@@ -1156,8 +1373,7 @@ async def handle_qna_workflow(state: State, config: RunnableConfig, writer: Stre
     except Exception as e:
         error_message = f"Error fetching relevant documents for QNA: {str(e)}"
         print(error_message)
-        streaming_service.only_update_terminal(f"❌ {error_message}", "error")
-        writer({"yeild_value": streaming_service._format_annotations()})
+        writer({"yield_value": streaming_service.format_error(error_message)})
         # Continue with empty documents - the QNA agent will handle this gracefully
         relevant_documents = []
     
@@ -1167,10 +1383,15 @@ async def handle_qna_workflow(state: State, config: RunnableConfig, writer: Stre
     print(f"Fetched {len(relevant_documents)} relevant documents for QNA")
     print(f"Added {len(user_selected_documents)} user-selected documents for QNA")
     print(f"Total documents for QNA: {len(all_documents)}")
-    
-    streaming_service.only_update_terminal(f"🧠 Generating comprehensive answer using {len(all_documents)} total sources ({len(user_selected_documents)} user-selected + {len(relevant_documents)} connector-found)...")
-    writer({"yeild_value": streaming_service._format_annotations()})
-    
+
+    writer(
+        {
+            "yield_value": streaming_service.format_terminal_info_delta(
+                f"🧠 Generating comprehensive answer using {len(all_documents)} total sources ({len(user_selected_documents)} user-selected + {len(relevant_documents)} connector-found)..."
+            )
+        }
+    )
+
     # Prepare configuration for the QNA agent
     qna_config = {
         "configurable": {
@@ -1189,11 +1410,17 @@ async def handle_qna_workflow(state: State, config: RunnableConfig, writer: Stre
     }
     
     try:
-        streaming_service.only_update_terminal("✍️ Writing comprehensive answer with citations...")
-        writer({"yeild_value": streaming_service._format_annotations()})
-        
+        writer(
+            {
+                "yield_value": streaming_service.format_terminal_info_delta(
+                    "✍️ Writing comprehensive answer with citations..."
+                )
+            }
+        )
+
         # Track streaming content for real-time updates
         complete_content = ""
+        captured_reranked_documents = []
         
         # Call the QNA agent with streaming
         async for _chunk_type, chunk in qna_agent_graph.astream(qna_state, qna_config, stream_mode=["values"]):
@@ -1208,33 +1435,237 @@ async def handle_qna_workflow(state: State, config: RunnableConfig, writer: Stre
                     if delta:
                         # Update terminal with progress
                         word_count = len(complete_content.split())
-                        streaming_service.only_update_terminal(f"✍️ Writing answer... ({word_count} words)")
-                        
-                        # Update the answer in real-time
-                        answer_lines = complete_content.split("\n")
-                        streaming_service.only_update_answer(answer_lines)
-                        writer({"yeild_value": streaming_service._format_annotations()})
+                        writer(
+                            {
+                                "yield_value": streaming_service.format_terminal_info_delta(
+                                    f"✍️ Writing answer... ({word_count} words)"
+                                )
+                            }
+                        )
+
+                        writer(
+                            {"yield_value": streaming_service.format_text_chunk(delta)}
+                        )
+
+            # Capture reranked documents from QNA agent for further question generation
+            if "reranked_documents" in chunk:
+                captured_reranked_documents = chunk["reranked_documents"]
         
         # Set default if no content was received
         if not complete_content:
             complete_content = "I couldn't find relevant information in your knowledge base to answer this question."
-        
-        streaming_service.only_update_terminal("🎉 Q&A answer generated successfully!")
-        writer({"yeild_value": streaming_service._format_annotations()})
-        
-        # Return the final answer in the expected state field
+
+        writer(
+            {
+                "yield_value": streaming_service.format_terminal_info_delta(
+                    "🎉 Q&A answer generated successfully!"
+                )
+            }
+        )
+
+        # Return the final answer and captured reranked documents for further question generation
         return {
-            "final_written_report": complete_content
+            "final_written_report": complete_content,
+            "reranked_documents": captured_reranked_documents
         }
         
     except Exception as e:
         error_message = f"Error generating QNA answer: {str(e)}"
         print(error_message)
-        streaming_service.only_update_terminal(f"❌ {error_message}", "error")
-        writer({"yeild_value": streaming_service._format_annotations()})
-        
-        return {
-            "final_written_report": f"Error generating answer: {str(e)}"
+        writer({"yield_value": streaming_service.format_error(error_message)})
+
+        return {"final_written_report": f"Error generating answer: {str(e)}"}
+
+
+async def generate_further_questions(state: State, config: RunnableConfig, writer: StreamWriter) -> Dict[str, Any]:
+    """
+    Generate contextually relevant follow-up questions based on chat history and available documents.
+    
+    This node takes the chat history and reranked documents from sub-agents (qna_agent or sub_section_writer)
+    and uses an LLM to generate follow-up questions that would naturally extend the conversation
+    and provide additional value to the user.
+    
+    Returns:
+        Dict containing the further questions in the "further_questions" key for state update.
+    """
+    from app.services.llm_service import get_user_fast_llm
+    
+    # Get configuration and state data
+    configuration = Configuration.from_runnable_config(config)
+    chat_history = state.chat_history
+    user_id = configuration.user_id
+    streaming_service = state.streaming_service
+    
+    # Get reranked documents from the state (will be populated by sub-agents)
+    reranked_documents = getattr(state, 'reranked_documents', None) or []
+
+    writer(
+        {
+            "yield_value": streaming_service.format_terminal_info_delta(
+                "🤔 Generating follow-up questions..."
+            )
         }
+    )
 
+    # Get user's fast LLM
+    llm = await get_user_fast_llm(state.db_session, user_id)
+    if not llm:
+        error_message = f"No fast LLM configured for user {user_id}"
+        print(error_message)
+        writer({"yield_value": streaming_service.format_error(error_message)})
 
+        # Stream empty further questions to UI
+        writer({"yield_value": streaming_service.format_further_questions_delta([])})
+        return {"further_questions": []}
+    
+    # Format chat history for the prompt
+    chat_history_xml = "<chat_history>\n"
+    for message in chat_history:
+        if hasattr(message, 'type'):
+            if message.type == "human":
+                chat_history_xml += f"<user>{message.content}</user>\n"
+            elif message.type == "ai":
+                chat_history_xml += f"<assistant>{message.content}</assistant>\n"
+        else:
+            # Handle other message types if needed
+            chat_history_xml += f"<message>{str(message)}</message>\n"
+    chat_history_xml += "</chat_history>"
+    
+    # Format available documents for the prompt
+    documents_xml = "<documents>\n"
+    for i, doc in enumerate(reranked_documents):
+        document_info = doc.get("document", {})
+        source_id = document_info.get("id", f"doc_{i}")
+        source_type = document_info.get("document_type", "UNKNOWN")
+        content = doc.get("content", "")
+        
+        documents_xml += f"<document>\n"
+        documents_xml += f"<metadata>\n"
+        documents_xml += f"<source_id>{source_id}</source_id>\n"
+        documents_xml += f"<source_type>{source_type}</source_type>\n"
+        documents_xml += f"</metadata>\n"
+        documents_xml += f"<content>\n{content}</content>\n"
+        documents_xml += f"</document>\n"
+    documents_xml += "</documents>"
+    
+    # Create the human message content
+    human_message_content = f"""
+    {chat_history_xml}
+    
+    {documents_xml}
+    
+    Based on the chat history and available documents above, generate 3-5 contextually relevant follow-up questions that would naturally extend the conversation and provide additional value to the user. Make sure the questions can be reasonably answered using the available documents or knowledge base.
+    
+    Your response MUST be valid JSON in exactly this format:
+    {{
+      "further_questions": [
+        {{
+          "id": 0,
+          "question": "further qn 1"
+        }},
+        {{
+          "id": 1,
+          "question": "further qn 2"
+        }}
+      ]
+    }}
+    
+    Do not include any other text or explanation. Only return the JSON.
+    """
+
+    writer(
+        {
+            "yield_value": streaming_service.format_terminal_info_delta(
+                "🧠 Analyzing conversation context to suggest relevant questions..."
+            )
+        }
+    )
+
+    # Create messages for the LLM
+    messages = [
+        SystemMessage(content=get_further_questions_system_prompt()),
+        HumanMessage(content=human_message_content)
+    ]
+    
+    try:
+        # Call the LLM
+        response = await llm.ainvoke(messages)
+        
+        # Parse the JSON response
+        content = response.content
+        
+        # Find the JSON in the content
+        json_start = content.find('{')
+        json_end = content.rfind('}') + 1
+        if json_start >= 0 and json_end > json_start:
+            json_str = content[json_start:json_end]
+            
+            # Parse the JSON string
+            parsed_data = json.loads(json_str)
+            
+            # Extract the further_questions array
+            further_questions = parsed_data.get("further_questions", [])
+
+            writer(
+                {
+                    "yield_value": streaming_service.format_terminal_info_delta(
+                        f"✅ Generated {len(further_questions)} contextual follow-up questions!"
+                    )
+                }
+            )
+
+            # Stream the further questions to the UI
+            writer(
+                {
+                    "yield_value": streaming_service.format_further_questions_delta(
+                        further_questions
+                    )
+                }
+            )
+
+            print(f"Successfully generated {len(further_questions)} further questions")
+            
+            return {"further_questions": further_questions}
+        else:
+            # If JSON structure not found, return empty list
+            error_message = (
+                "Could not find valid JSON in LLM response for further questions"
+            )
+            print(error_message)
+            writer(
+                {
+                    "yield_value": streaming_service.format_error(
+                        f"Warning: {error_message}"
+                    )
+                }
+            )
+
+            # Stream empty further questions to UI
+            writer(
+                {"yield_value": streaming_service.format_further_questions_delta([])}
+            )
+            return {"further_questions": []}
+            
+    except (json.JSONDecodeError, ValueError) as e:
+        # Log the error and return empty list
+        error_message = f"Error parsing further questions response: {str(e)}"
+        print(error_message)
+        writer(
+            {"yield_value": streaming_service.format_error(f"Warning: {error_message}")}
+        )
+
+        # Stream empty further questions to UI
+        writer({"yield_value": streaming_service.format_further_questions_delta([])})
+        return {"further_questions": []}
+    
+    except Exception as e:
+        # Handle any other errors
+        error_message = f"Error generating further questions: {str(e)}"
+        print(error_message)
+        writer(
+            {"yield_value": streaming_service.format_error(f"Warning: {error_message}")}
+        )
+
+        # Stream empty further questions to UI
+        writer({"yield_value": streaming_service.format_further_questions_delta([])})
+        return {"further_questions": []}

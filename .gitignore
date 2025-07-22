@@ -1,2 +1,3 @@
 .flashrank_cache*
 podcasts/
+.env
