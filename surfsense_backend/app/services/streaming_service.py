@@ -1,27 +1,15 @@
 import json
-from typing import Any, Dict, List
+from typing import Any
 
 
 class StreamingService:
     def __init__(self):
         self.terminal_idx = 1
         self.message_annotations = [
-            {
-                "type": "TERMINAL_INFO",
-                "content": []
-            },
-            {
-                "type": "SOURCES",
-                "content": []
-            },
-            {
-                "type": "ANSWER",
-                "content": []
-            },
-            {
-                "type": "FURTHER_QUESTIONS",
-                "content": []
-            }
+            {"type": "TERMINAL_INFO", "content": []},
+            {"type": "SOURCES", "content": []},
+            {"type": "ANSWER", "content": []},
+            {"type": "FURTHER_QUESTIONS", "content": []},
         ]
 
     # DEPRECATED: This sends the full annotation array every time (inefficient)
@@ -35,7 +23,7 @@ class StreamingService:
         Returns:
             str: The formatted annotations string
         """
-        return f'8:{json.dumps(self.message_annotations)}\n'
+        return f"8:{json.dumps(self.message_annotations)}\n"
 
     def format_terminal_info_delta(self, text: str, message_type: str = "info") -> str:
         """
@@ -55,10 +43,10 @@ class StreamingService:
         self.message_annotations[0]["content"].append(message)
 
         # Return only the delta annotation
-        annotation = {"type": "TERMINAL_INFO", "content": [message]}
+        annotation = {"type": "TERMINAL_INFO", "data": message}
         return f"8:[{json.dumps(annotation)}]\n"
 
-    def format_sources_delta(self, sources: List[Dict[str, Any]]) -> str:
+    def format_sources_delta(self, sources: list[dict[str, Any]]) -> str:
         """
         Format sources as a delta annotation
 
@@ -72,7 +60,23 @@ class StreamingService:
         self.message_annotations[1]["content"] = sources
 
         # Return only the delta annotation
-        annotation = {"type": "SOURCES", "content": sources}
+        nodes = []
+
+        for group in sources:
+            for source in group.get("sources", []):
+                node = {
+                    "id": str(source.get("id", "")),
+                    "text": source.get("description", ""),
+                    "url": source.get("url", ""),
+                    "metadata": {
+                        "title": source.get("title", ""),
+                        "source_type": group.get("type", ""),
+                        "group_name": group.get("name", ""),
+                    },
+                }
+                nodes.append(node)
+
+        annotation = {"type": "sources", "data": {"nodes": nodes}}
         return f"8:[{json.dumps(annotation)}]\n"
 
     def format_answer_delta(self, answer_chunk: str) -> str:
@@ -95,7 +99,7 @@ class StreamingService:
         annotation = {"type": "ANSWER", "content": [answer_chunk]}
         return f"8:[{json.dumps(annotation)}]\n"
 
-    def format_answer_annotation(self, answer_lines: List[str]) -> str:
+    def format_answer_annotation(self, answer_lines: list[str]) -> str:
         """
         Format the complete answer as a replacement annotation
 
@@ -113,7 +117,7 @@ class StreamingService:
         return f"8:[{json.dumps(annotation)}]\n"
 
     def format_further_questions_delta(
-        self, further_questions: List[Dict[str, Any]]
+        self, further_questions: list[dict[str, Any]]
     ) -> str:
         """
         Format further questions as a delta annotation
@@ -128,7 +132,14 @@ class StreamingService:
         self.message_annotations[3]["content"] = further_questions
 
         # Return only the delta annotation
-        annotation = {"type": "FURTHER_QUESTIONS", "content": further_questions}
+        annotation = {
+            "type": "FURTHER_QUESTIONS",
+            "data": [
+                question.get("question", "")
+                for question in further_questions
+                if question.get("question", "") != ""
+            ],
+        }
         return f"8:[{json.dumps(annotation)}]\n"
 
     def format_text_chunk(self, text: str) -> str:
@@ -155,14 +166,16 @@ class StreamingService:
         """
         return f"3:{json.dumps(error_message)}\n"
 
-    def format_completion(self, prompt_tokens: int = 156, completion_tokens: int = 204) -> str:
+    def format_completion(
+        self, prompt_tokens: int = 156, completion_tokens: int = 204
+    ) -> str:
         """
         Format a completion message
-        
+
         Args:
             prompt_tokens: Number of prompt tokens
             completion_tokens: Number of completion tokens
-            
+
         Returns:
             str: The formatted completion string
         """
@@ -172,7 +185,7 @@ class StreamingService:
             "usage": {
                 "promptTokens": prompt_tokens,
                 "completionTokens": completion_tokens,
-                "totalTokens": total_tokens
-            }
+                "totalTokens": total_tokens,
+            },
         }
-        return f'd:{json.dumps(completion_data)}\n' 
+        return f"d:{json.dumps(completion_data)}\n"
